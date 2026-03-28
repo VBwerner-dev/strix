@@ -19,6 +19,7 @@ from strix.llm.utils import (
 )
 from strix.skills import load_skills
 from strix.tools import get_tools_prompt
+from strix.utils.rate_limiter import RateLimiter, create_rate_limiter
 from strix.utils.resource_paths import get_strix_resource_path
 
 
@@ -70,6 +71,13 @@ class LLM:
         self._total_stats = RequestStats()
         self.memory_compressor = MemoryCompressor(model_name=config.litellm_model)
         self.system_prompt = self._load_system_prompt(agent_name)
+
+        # Initialize rate limiter from config or environment
+        rpm_limit = int(Config.get("strix_rpm") or Config.get("requests_per_minute") or "0")
+        if rpm_limit > 0:
+            self.rate_limiter = create_rate_limiter(rpm=rpm_limit)
+        else:
+            self.rate_limiter = None
 
         reasoning = Config.get("strix_reasoning_effort")
         if reasoning:
@@ -158,6 +166,10 @@ class LLM:
 
         for attempt in range(max_retries + 1):
             try:
+                # Apply rate limiting if configured
+                if self.rate_limiter:
+                    await self.rate_limiter.acquire()
+                
                 async for response in self._stream(messages):
                     yield response
                 return  # noqa: TRY300
